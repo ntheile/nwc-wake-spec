@@ -4,7 +4,7 @@
 
 ## Abstract
 
-This NIP defines an optional wake mechanism for NIP-47 / Nostr Wallet Connect wallet services that are not continuously connected to relays. A concrete use case is a bill-pay or rent-collection app that has been authorized through NWC to pull a monthly payment from a user’s wallet. If the user’s wallet service runs inside a mobile wallet app, the app may be offline, backgrounded, or killed when the payment request is sent. This extension gives the NWC client a standard way to notify the wallet’s own wake provider that a valid NWC request is waiting.
+This NIP defines an optional wake mechanism for NIP-47 / Nostr Wallet Connect wallet services that are not continuously connected to relays. A concrete use case is a bill-pay or rent-collection app that has been authorized through NWC to pull a monthly payment from a user’s wallet. If the user’s wallet service runs inside a mobile wallet app, the app may be offline, backgrounded, or killed when the payment request is sent. This extension gives the wallet’s own wake provider a standard way to learn that a valid NWC request is waiting and wake the wallet app.
 
 A wake-capable wallet may include a wallet-controlled wake endpoint in the NWC connection URI. A typical endpoint is:
 
@@ -24,7 +24,7 @@ nostr+walletconnect://<wallet_service_pubkey>
   &wake=https%3A%2F%2Fpush.wallet.example%2F.well-known%2Fnostr%2Fnwc-wake
 ```
 
-After publishing a normal NIP-47 request event to the relay, the NWC client may call the wake endpoint with a small payload such as:
+The wake provider may discover pending requests by watching configured relays for registered NWC connections. A wake-capable wallet MAY also expose a wake endpoint that NWC clients or test tools can call with a small payload such as:
 
 ```json
 {
@@ -38,7 +38,7 @@ After publishing a normal NIP-47 request event to the relay, the NWC client may 
 
 The wake provider may then use platform notification systems such as APNs, FCM, iOS Notification Service Extensions, Android background handlers, or other wallet-controlled mechanisms to wake the wallet app.
 
-After being woken, the wallet app connects to the relay, fetches the original NIP-47 request by `event_id`, decrypts it, applies wallet-side policy such as budgets and allowed methods, and responds using the normal NIP-47 response event.
+After being woken, the wallet app or extension obtains the original NIP-47 request from the relay or from an encrypted event included by the wake provider, decrypts it, applies wallet-side policy such as budgets and allowed methods, and responds using the normal NIP-47 response event.
 
 This NIP does not change NIP-47 request or response formats. It does not define recurring payment rules, budgets, subscriptions, invoices, or authorization policy. Those remain NIP-47 wallet-service behavior. Wake is only a delivery mechanism for pending NWC requests, not payment authorization.
 
@@ -52,7 +52,7 @@ This extension solves one narrow problem:
 
 - A valid NWC request has been published.
 - The wallet app may be asleep.
-- The NWC client needs a standard way to ask the wallet provider to wake the wallet.
+- The wallet provider needs a standard way to wake the wallet.
 
 The relay does not need to understand wake. The relay does not need to call HTTP endpoints. The relay can be any ordinary Nostr relay that carries NIP-47 events.
 
@@ -75,20 +75,91 @@ NWC Wake flow:
 ```text
 NWC client
 → publishes normal kind:23194 request to relay
-→ calls wake URL from NWC connection string
+→ wake provider observes the request on the relay or receives a direct wake request
 → wallet wake provider sends push/wake notification
 → wallet app wakes
-→ wallet app fetches original kind:23194 request from relay
+→ wallet app obtains original kind:23194 request from relay or encrypted wake payload
 → wallet app decrypts request
 → wallet app applies NWC wallet-side policy
 → wallet app pays or rejects
 → wallet app publishes normal kind:23195 response
 ```
 
-The key difference from relay-based wake designs is:
+The key difference from relay-extension wake designs is:
 
-- The relay does not wake the wallet.
-- The NWC client calls the wallet's wake endpoint.
+- The relay does not need to wake the wallet.
+- The wake provider can connect to ordinary relays as a Nostr client.
+- A direct wake endpoint remains possible for wake-aware clients and manual tests.
+
+## Architecture
+
+### Creating And Registering An NWC Connection
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Rebel as Rebel Wallet
+    participant Wake as Wake Server
+    participant Alby as Alby Go
+
+    User->>Rebel: Create NWC connection
+    Rebel->>Rebel: Generate NWC keys and URI
+    Rebel->>Rebel: Store permissions and budget
+    Rebel->>Wake: Register APNs token, relay, client pubkey, wallet pubkey
+    Wake-->>Rebel: Registration accepted
+    Rebel->>Rebel: Add wake provider URL to copied NWC URI
+    User->>Alby: Paste NWC URI
+    Alby->>Alby: Store NWC connection
+```
+
+APNs is not called during NWC registration. The wallet app already has its APNs device token and sends that token to the wake provider with NWC metadata.
+
+### Wake Server Relay Watch
+
+```mermaid
+sequenceDiagram
+    participant DB as Wake DB
+    participant Wake as Wake Server
+    participant Relay as Nostr Relay
+    participant APNs as APNs
+    participant NSE as Wallet NSE
+
+    Wake->>DB: Load registered NWC wake connections
+    DB-->>Wake: Relays, client pubkeys, wallet pubkeys
+    Wake->>Relay: Open websocket
+    Wake->>Relay: Subscribe to matching NWC request events
+
+    Relay-->>Wake: Matching encrypted NWC event
+    Wake->>DB: Find APNs registration for pubkeys and relay
+    DB-->>Wake: Device token, bundle id, APNs environment
+    Wake->>APNs: Send wake push with event_id and encrypted event
+    APNs-->>NSE: Deliver wake notification
+```
+
+The wake server matches the public Nostr envelope. It does not decrypt the NWC request.
+
+### Handling A Wake Request
+
+```mermaid
+sequenceDiagram
+    participant Client as NWC Client
+    participant Relay as Nostr Relay
+    participant Wake as Wake Server
+    participant APNs as APNs
+    participant NSE as Wallet NSE
+    participant Wallet as Wallet Backend
+
+    Client->>Relay: Publish encrypted NWC request
+    Wake->>Relay: Listen for NWC request
+    Relay-->>Wake: Matching event
+    Wake->>APNs: Send wake push
+    APNs->>NSE: Deliver notification
+    NSE->>NSE: Decrypt and check policy
+    NSE->>Wallet: Run supported request locally
+    Wallet-->>NSE: Result
+    NSE->>Relay: Publish encrypted NWC response
+    Relay-->>Client: Return response
+```
 
 ## Goals
 
@@ -150,7 +221,7 @@ An HTTPS endpoint supplied by the wallet provider in the NWC connection URI.
 
 ### Wake provider
 
-A service controlled by the wallet provider. It receives wake requests from NWC clients and decides whether to wake a wallet app.
+A service controlled by the wallet provider. It watches relays or receives wake requests from NWC clients and decides whether to wake a wallet app.
 
 ### Wallet app
 
@@ -159,6 +230,10 @@ A mobile, desktop, or native wallet application that can process a pending NIP-4
 ### Wake request
 
 An HTTP request from the NWC client to the wallet wake provider indicating that a specific NIP-47 request is waiting on a relay.
+
+### Wake registration
+
+A wallet-provider-internal registration that maps an NWC connection to a platform wake target such as an APNs device token.
 
 ## NWC URI Extension
 
@@ -214,11 +289,32 @@ POST https://push.wallet.example/.well-known/nostr/nwc-wake
 
 Wallets MAY use another HTTPS path if that exact path is included in the `wake` URI parameter.
 
+## Wallet Provider Registration
+
+In relay-watcher mode, the wallet app registers wake metadata with its own wake provider when the NWC connection is created or updated.
+
+This registration is provider-internal and MUST NOT be published to relays or exposed in the NWC URI.
+
+Example registration fields:
+
+| Field | Description |
+| --- | --- |
+| APNs/FCM token | Platform wake token for the wallet app install. |
+| bundle/app id | Platform app identifier used by the push provider. |
+| `client_pubkey` | Pubkey that signs NWC request events for this connection. |
+| `wallet_service_pubkey` | Pubkey tagged by NWC request events. |
+| `relay` | Relay to watch for this connection. |
+| `enabled` | Whether wake is enabled for this connection. |
+
+The wake provider and mobile wallet app are usually tightly coupled and often operated by the same developer or organization. This is because the wake provider needs platform-specific app metadata, such as APNs topics, push environments, device tokens, and app-group or extension assumptions, while the mobile app needs to trust that the wake provider only wakes registered wallet connections. A third-party wake provider is possible, but it would need an explicit trust, registration, and operational relationship with the wallet app developer.
+
 ## Client Behavior
 
 When a client has an NWC connection URI containing `wake`, it MAY perform wake after publishing a NIP-47 request.
 
-The client flow is:
+In relay-watcher mode, the client does not need to call the wake endpoint. The wake provider has already been registered by the wallet app and is watching the relay for matching NWC request events.
+
+The direct client-triggered flow is:
 
 1. Build normal NIP-47 request.
 2. Publish `kind:23194` event to the relay from the NWC URI.
@@ -261,7 +357,7 @@ Wake providers MAY reject wake requests for NIP-47 events with no expiration or 
 
 ## Wake Request
 
-After publishing the NIP-47 request event, the client sends an HTTP POST to the wake endpoint.
+After publishing the NIP-47 request event, a wake-aware client MAY send an HTTP POST to the wake endpoint. This is optional when the wallet provider is already watching relays for registered NWC connections.
 
 Example:
 
@@ -322,7 +418,7 @@ Production implementations SHOULD NOT expose unauthenticated wake endpoints with
 
 ## Wake Provider Validation
 
-The wake provider MUST validate:
+For direct wake requests, the wake provider MUST validate:
 
 - The request body is valid JSON.
 - `protocol` is `nwc_wake`.
@@ -343,6 +439,8 @@ The wake provider MUST validate:
 The wake provider MUST NOT treat a wake request as payment authorization.
 
 The wake provider MUST NOT require access to decrypted NIP-47 content.
+
+In relay-watcher mode, the wake provider receives the Nostr event directly from the relay subscription and validates the public event envelope against its registered NWC connections before sending a platform wake notification.
 
 ## Wake Provider Response
 
@@ -398,9 +496,9 @@ Suggested rejection codes:
 
 ## Platform Wake Notification Payload
 
-After accepting a wake request, the wake provider may send APNs, FCM, local push, platform-specific wake, or another wallet-controlled notification to the wallet app.
+After observing or accepting a wake trigger, the wake provider may send APNs, FCM, local push, platform-specific wake, or another wallet-controlled notification to the wallet app.
 
-The platform wake payload SHOULD contain only enough information for the wallet app to fetch the original NIP-47 request.
+The platform wake payload SHOULD contain only enough information for the wallet app to obtain the original NIP-47 request.
 
 Logical payload:
 
@@ -410,9 +508,12 @@ Logical payload:
   "version": "v1",
   "relay": "wss://relay.getalby.com",
   "event_id": "0123456789abcdef...",
-  "wallet_service_pubkey": "abcdef0123456789..."
+  "wallet_service_pubkey": "abcdef0123456789...",
+  "nwc_event": "<optional encrypted nostr event JSON>"
 }
 ```
+
+The `nwc_event` field is optional. It contains the original encrypted Nostr event JSON and allows a mobile extension to respond without refetching an ephemeral event from the relay.
 
 The platform wake payload MUST NOT include:
 
@@ -427,6 +528,8 @@ The platform wake payload MUST NOT include:
 - preimage
 - wallet balance
 - wallet API token
+
+The encrypted Nostr event may contain ciphertext for payment details, but the wake provider and push provider cannot decrypt it unless they also control the wallet-service key.
 
 Visible notification text SHOULD be generic.
 
@@ -448,19 +551,20 @@ Wallets MAY show richer payment details only after the wallet app locally fetche
 
 After receiving a wake notification, the wallet app SHOULD:
 
-1. Open a short-lived connection to the relay.
-2. Fetch the event by `event_id`.
-3. Verify the event id.
-4. Verify the event signature.
-5. Verify `kind:23194`.
-6. Verify the `p` tag matches `wallet_service_pubkey`.
-7. Verify the event is not expired.
-8. Decrypt the NIP-47 request using normal NWC encryption.
-9. Verify the requesting client pubkey is authorized for this NWC connection.
-10. Apply wallet-side NWC policy.
-11. Execute or reject the request.
-12. Publish a normal `kind:23195` response.
-13. Close the relay connection when done.
+1. Parse the wake payload.
+2. Use an embedded encrypted Nostr event if present, otherwise open a short-lived connection to the relay.
+3. Fetch the event by `event_id` when needed.
+4. Verify the event id.
+5. Verify the event signature.
+6. Verify `kind:23194`.
+7. Verify the `p` tag matches `wallet_service_pubkey`.
+8. Verify the event is not expired.
+9. Decrypt the NIP-47 request using normal NWC encryption.
+10. Verify the requesting client pubkey is authorized for this NWC connection.
+11. Apply wallet-side NWC policy.
+12. Execute or reject the request.
+13. Publish a normal `kind:23195` response.
+14. Close the relay connection when done.
 
 Wallet-side policy may include:
 
@@ -473,6 +577,8 @@ Wallet-side policy may include:
 - merchant restrictions
 
 The wallet MUST NOT interpret wake as user consent.
+
+Mobile wallets MAY handle a limited set of methods inside a platform extension while the main app is killed. For example, the Rebel Wallet prototype handles `get_info`, `get_balance`, `make_invoice`, and `pay_invoice` in an iOS Notification Service Extension, subject to local permissions and budget policy.
 
 ## Event Fetch Fallback
 
@@ -570,9 +676,9 @@ This advertisement is optional.
 
 Clients SHOULD prefer the wake URI parameter when present because it is connection-specific.
 
-## Optional Relay Watcher Mode
+## Relay Watcher Mode
 
-A wallet provider MAY also run a relay watcher.
+A wallet provider MAY run a relay watcher. This is the primary mode used by the current Rebel Wallet prototype.
 
 In watcher mode, the wake provider connects to normal Nostr relays as a client and subscribes for NIP-47 requests addressed to wallet-service pubkeys it controls.
 
@@ -581,19 +687,22 @@ Example subscription:
 ```json
 ["REQ", "nwc-wake-watch", {
   "kinds": [23194],
+  "authors": ["<client_pubkey>"],
   "#p": ["<wallet_service_pubkey>"]
 }]
 ```
 
-When the wake provider observes a matching request, it may cache the encrypted event and wake the wallet app.
+When the wake provider observes a matching request, it may include the encrypted event in the platform wake payload and wake the wallet app.
 
-Watcher mode is optional and does not require relay support.
+Watcher mode does not require relay support beyond ordinary Nostr subscriptions.
 
-The primary flow remains:
+The watcher flow is:
 
 ```text
 NWC client publishes request
-NWC client calls wake URL from connection string
+wake provider observes request on relay
+wake provider sends platform wake notification
+wallet app or extension responds normally over NWC
 ```
 
 ## Optional Custom Relay Mode
@@ -659,6 +768,12 @@ The wake provider SHOULD NOT learn:
 - wallet balance
 
 unless it is also the wallet service and is authorized to decrypt the request.
+
+### Local extension key material
+
+Mobile platforms may require local key material in an app extension if the wallet wants to respond while the main app is killed. For example, an iOS Notification Service Extension may need enough local state to decrypt the NWC request, apply wallet policy, and sign the NWC response.
+
+Wallets SHOULD minimize this material, keep it local to the app and extension, and prefer platform-protected storage such as shared Keychain access where possible.
 
 ### Replay protection
 
@@ -733,17 +848,17 @@ The wake URI parameter is optional and MUST be ignored by clients that do not un
   - `relay=wss://relay.getalby.com`
   - `secret=<client_secret>`
   - `wake=https://merchant.zaprite.com/.well-known/nostr/nwc-wake`
+- Zaprite P2P registers the device token and NWC public metadata with its wake provider.
 - Zaprite Rent stores the NWC URI.
 
 ### Monthly payment
 
 - Zaprite Rent creates Lightning invoice to landlord.
 - Zaprite Rent publishes NIP-47 `kind:23194` `pay_invoice` request to `relay.getalby.com`.
-- Zaprite Rent calls wake endpoint from the NWC URI.
-- Zaprite wake provider sends APNs/FCM push to Zaprite P2P.
+- Zaprite wake provider observes the request on the relay.
+- Zaprite wake provider sends APNs/FCM push to Zaprite P2P with the encrypted event.
 - Zaprite P2P NSE wakes.
-- Zaprite P2P fetches request by `event_id`.
-- Zaprite P2P decrypts request.
+- Zaprite P2P verifies and decrypts the request.
 - Zaprite P2P checks monthly budget.
 - Zaprite P2P pays invoice using configured wallet backend.
 - Zaprite P2P publishes `kind:23195` response to `relay.getalby.com`.
@@ -815,10 +930,12 @@ Content-Type: application/json
 - Should the wallet app be allowed to fetch the encrypted event from the wake provider if the relay dropped it?
 - Should clients be required to include an expiration tag when using wake?
 - Should the wake endpoint URL be connection-specific, wallet-service-specific, or provider-wide?
+- Should APNs/FCM payloads standardize an embedded encrypted event field such as `nwc_event`?
+- Should relay watcher registration be standardized separately from direct wake requests?
 
 ## Suggested Community Summary
 
-NWC already supports app-specific wallet connections, wallet-side constraints, and budgets. The remaining problem for mobile wallets is delivery: the wallet service may not be connected when a request arrives. This proposal adds a minimal optional `wake` parameter to the NWC URI. After publishing a normal NIP-47 request, the client may call the wallet-controlled wake endpoint. The wallet provider may then wake the mobile wallet using APNs, FCM, iOS NSE, Android background handlers, or another wallet-controlled mechanism. The wallet processes the original NIP-47 request normally. Wake is not authorization, no raw push tokens are exposed, and off-the-shelf Nostr relays remain compatible.
+NWC already supports app-specific wallet connections, wallet-side constraints, and budgets. The remaining problem for mobile wallets is delivery: the wallet service may not be connected when a request arrives. This proposal adds a wallet-controlled wake mechanism. A wallet provider can register mobile wake metadata, watch ordinary Nostr relays for matching NWC requests, and wake the mobile wallet using APNs, FCM, iOS NSE, Android background handlers, or another wallet-controlled mechanism. A direct `wake` endpoint in the NWC URI remains available for wake-aware clients and manual tests. The wallet processes the original NIP-47 request normally. Wake is not authorization, no raw push tokens are exposed, and off-the-shelf Nostr relays remain compatible.
 
 ## Source
 
