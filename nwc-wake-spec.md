@@ -308,6 +308,36 @@ Example registration fields:
 
 The wake provider and mobile wallet app are usually tightly coupled and often operated by the same developer or organization. This is because the wake provider needs platform-specific app metadata, such as APNs topics, push environments, device tokens, and app-group or extension assumptions, while the mobile app needs to trust that the wake provider only wakes registered wallet connections. A third-party wake provider is possible, but it would need an explicit trust, registration, and operational relationship with the wallet app developer.
 
+### Provider-Private APNs Registration Endpoint
+
+A wallet provider MAY expose a private registration endpoint used only by its own wallet app. This endpoint is not part of the public NWC Wake client protocol. It is a provider implementation detail for binding an app install's platform push token to one or more NWC wake registrations.
+
+For example, an iOS wallet app might call:
+
+```http
+POST https://push.wallet.example/register-apns-nwc
+```
+
+Example request:
+
+```json
+{
+  "id": "<wallet-app-install-id>",
+  "device_token": "<apns-device-token>",
+  "bundle_id": "com.wallet.example",
+  "environment": "sandbox",
+  "author": "<nwc-client-pubkey>",
+  "tagged": "<wallet-service-pubkey>",
+  "relay": "wss://relay.getalby.com/v1",
+  "name": "Monthly bills",
+  "enabled": true
+}
+```
+
+The exact path, authentication scheme, storage model, and payload shape are provider-specific. Implementations SHOULD authenticate this endpoint, SHOULD only accept registrations from wallet app builds they control, and MUST NOT expose the platform push token in the NWC URI, Nostr events, relay subscriptions, or public wake endpoint responses.
+
+The [Mutiny notification-server](https://github.com/mutinyWallet/notification-server/) is a useful reference implementation lineage for a Rust push notification server. It is not an NWC Wake specification dependency, but it demonstrates the kind of provider-operated service that stores notification registrations and sends platform push notifications from server-side credentials.
+
 ## Client Behavior
 
 When a client has an NWC connection URI containing `wake`, it MAY perform wake after publishing a NIP-47 request.
