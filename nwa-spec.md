@@ -9,7 +9,7 @@ Nostr Wallet Auth (NWA) defines an app-initiated authorization flow for creating
 NWA supports two setup modes:
 
 - **Client-created secret mode:** the requesting app generates the NWC client secret locally before opening the wallet. The app shares only the corresponding client public key, requested capabilities, relays, and callback information with the wallet. The wallet records the approved policy for that client public key and returns the wallet service public key and selected relay information. The requesting app then assembles the final `nostr+walletconnect://` URI locally using its own secret.
-- **Wallet-created secret mode:** the wallet creates the NWC client secret after user approval and returns a complete `nostr+walletconnect://` URI to the requesting app. This is less ideal for secret handling, but it matches existing NWC pairing-code behavior and is useful for compatibility.
+- **Wallet-created secret mode:** the wallet creates the NWC client secret after user approval and returns a complete `nostr+walletconnect://` URI to the requesting app. This is less ideal for secret handling, but it matches existing NWC pairing-code behavior and is useful for mobile-to-mobile compatibility.
 
 This specification does not change NIP-47 request or response events. It standardizes the setup handoff between an app and a wallet.
 
@@ -52,6 +52,8 @@ sequenceDiagram
 ```
 
 ### Wallet-Created Secret Flow
+
+> Security warning: wallet-created secret mode returns secret-bearing NWC material through the app handoff. It SHOULD only be used for mobile-to-mobile app flows where both apps can receive the callback directly. Web, server, and cross-device flows SHOULD use client-created secret mode.
 
 ```mermaid
 sequenceDiagram
@@ -622,7 +624,9 @@ In wallet-created secret mode, requesting apps MUST reject `status=approved` cal
 
 Wallet-created secret mode returns a complete `nostr+walletconnect://` URI through a callback parameter such as `nwc_uri` or `value`.
 
-Wallets MAY support this mode for compatibility. However, new NWA implementations SHOULD prefer client-created secret mode so the client secret never leaves the requesting app.
+Wallets MAY support this mode for mobile-to-mobile compatibility. However, new NWA implementations SHOULD prefer client-created secret mode so the client secret never leaves the requesting app.
+
+Wallet-created secret mode SHOULD NOT be used for web, server, or cross-device flows because the returned NWC URI contains secret key material and may be exposed through browser history, server logs, analytics, referrers, crash reports, or intermediate redirect handlers.
 
 Requesting apps MAY accept `value` or `nwc_uri` from trusted wallets.
 
@@ -689,6 +693,8 @@ In client-created secret mode, the client secret MUST NOT be included in the NWA
 Wallets SHOULD NOT ask the requesting app to send a client-created secret.
 
 In wallet-created secret mode, the wallet creates the client secret and returns it inside a complete NWC URI. Wallets SHOULD return that URI in a fragment rather than a query string and SHOULD avoid logging it.
+
+Wallet-created secret mode SHOULD be limited to mobile-to-mobile app flows where the wallet can return directly to the requesting app. Web, server, and cross-device flows SHOULD use client-created secret mode.
 
 ### Callback data
 
