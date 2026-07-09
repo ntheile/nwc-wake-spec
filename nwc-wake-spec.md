@@ -285,7 +285,7 @@ Example request:
 
 For Android, the same endpoint can use `"push_service": "fcm"` and place the FCM registration token in `push_token`.
 
-The exact path, authentication scheme, storage model, and payload shape are provider-specific. Implementations SHOULD authenticate this endpoint, SHOULD only accept registrations from wallet app builds they control, and MUST NOT expose the platform push token in the NWC URI, Nostr events, relay subscriptions, or public responses.
+The exact path, authentication scheme, storage model, and payload shape are provider-specific. Implementations MUST authenticate registration, update, disable, and deletion requests, SHOULD only accept registrations from wallet app builds they control, and MUST NOT expose the platform push token in the NWC URI, Nostr events, relay subscriptions, or public responses.
 
 ### Reference Implementation Registration Shape
 
@@ -298,6 +298,22 @@ Authorization: Nostr <base64-kind-27235-event>
 ```
 
 The auth event is signed by `wallet_service_pubkey` and binds the request URL, HTTP method, and SHA-256 hash of the JSON body. This proves that the wallet app controls the NWC wallet-service key being registered without exposing the NWC secret or platform push token publicly.
+
+For every registration mutation authenticated with NIP-98, the server MUST:
+
+- verify the event id and Schnorr signature
+- require `kind:27235`
+- require the event pubkey to exactly match `wallet_service_pubkey` in the request body
+- require exactly one `u` tag equal to the server's configured canonical public request URL
+- require exactly one `method` tag matching the HTTP method
+- require exactly one `payload` tag equal to the lowercase hexadecimal SHA-256 hash of the exact request body bytes
+- reject auth events whose `created_at` is outside a short freshness window, recommended at 60 seconds
+- reject a previously accepted auth event id within at least the freshness window
+- accept the request only over HTTPS
+
+Servers behind a reverse proxy MUST derive the expected `u` tag from a configured public base URL or from headers supplied by a trusted proxy boundary. They MUST NOT trust arbitrary forwarded host or protocol headers from direct clients.
+
+Registration ownership MUST be scoped to the authenticated wallet service key. A signer MUST NOT be able to update or disable registrations owned by another wallet service key, even if it guesses an installation id. Implementations SHOULD use a stable registration identifier that does not depend on the current push token so token rotation and authenticated deletion cannot leave stale active registrations.
 
 Register or update a push target:
 
@@ -334,6 +350,21 @@ Disable the registration for the same NWC connection by sending the same identif
 ```
 
 The [Mutiny notification-server](https://github.com/mutinyWallet/notification-server/) is a useful reference implementation lineage for a Rust push notification server. It is not an NWC Wake specification dependency, but it demonstrates the kind of provider-operated service that stores notification registrations and sends platform push notifications from server-side credentials.
+
+### Relay Destination Safety
+
+Relay URLs become outbound network destinations for the wallet app and wake provider. They MUST be treated as untrusted input even when they arrive through an authenticated wallet registration.
+
+Before connecting to a registered destination, hosted wake providers MUST:
+
+- require `wss`
+- reject URLs containing user information or fragments
+- limit the number of relays registered per connection
+- restrict destination ports to an explicit policy
+- resolve the hostname and reject loopback, private, link-local, multicast, and otherwise non-public addresses unless the operator explicitly configured that destination
+- repeat destination validation after redirects and subsequent DNS resolutions
+
+Wake providers SHOULD use an allowlist of wallet-supported relays when arbitrary relay connectivity is not required. A self-hosted wake provider MAY allow operator-configured private relays, but an untrusted wallet registration MUST NOT create that exception. Implementations MUST also bound connection attempts, subscription count, message size, and reconnect frequency so a registered relay cannot exhaust watcher resources.
 
 ## Client Behavior
 
@@ -687,9 +718,22 @@ Wallets SHOULD minimize this material, keep it local to the app and extension, a
 
 Clients SHOULD include expiration tags.
 
-Wake providers MUST deduplicate by `event_id`.
+Wake providers MUST deduplicate wake delivery attempts by `event_id`, while still allowing bounded push retries when delivery fails.
 
 Wallets MUST reject expired requests.
+
+Wake-provider deduplication is not sufficient to prevent duplicate wallet actions. Platform push delivery is at-least-once, one event may be observed on multiple relays, and the wallet app and a platform extension may process concurrently.
+
+Before executing a NIP-47 request, the wallet MUST atomically claim its `event_id` in durable storage shared by every wallet execution context. After execution, it MUST durably store the terminal result and enough response data to rebuild or republish the same `kind:23195` response.
+
+When the wallet receives an already-claimed event:
+
+- if processing is still in progress, it MUST NOT execute the wallet action again
+- if processing completed, it MUST NOT execute the wallet action again and SHOULD republish the stored response when the client may not have received it
+- if processing failed before the wallet action began, it MAY release the claim for a bounded retry
+- if execution outcome is uncertain, it MUST reconcile the underlying wallet operation before retrying
+
+Payment methods SHOULD also use the Lightning payment hash or another backend idempotency key when the wallet backend supports it. Budget updates and the terminal request result SHOULD be committed atomically with, or reconciled against, the wallet operation.
 
 ### Spam protection
 
@@ -739,35 +783,35 @@ Wallets that do not support wake continue requiring an online wallet service.
 
 Relays do not need to support this NIP.
 
-## Example: Zaprite P2P Rent Autopay
+## Example: Rent Autopay
 
 ### Setup
 
-- Tenant opens Zaprite P2P.
-- Tenant creates NWC connection for Zaprite Rent.
-- Zaprite P2P sets wallet-side policy:
+- Tenant opens the wallet app from the rent app's NWC authorization request.
+- Tenant creates an NWC connection for the rent app.
+- Wallet app stores the approved wallet-side policy:
   - method: `pay_invoice`
   - budget: `$100/month equivalent`
   - interval: monthly
   - max fee: wallet-defined
-- Zaprite P2P returns NWC URI:
+- Wallet app returns or authorizes the normal NWC connection:
   - `relay=wss://relay.getalby.com`
   - `secret=<client_secret>`
-- Zaprite P2P registers the device token and NWC public metadata with its wake provider.
-- Zaprite Rent stores the NWC URI.
+- Wallet app registers its device token and NWC public metadata with its wallet-controlled wake provider.
+- Rent app stores the resulting NWC connection.
 
 ### Monthly payment
 
-- Zaprite Rent creates Lightning invoice to landlord.
-- Zaprite Rent publishes NIP-47 `kind:23194` `pay_invoice` request to `relay.getalby.com`.
-- Zaprite wake provider observes the request on the relay.
-- Zaprite wake provider sends APNs/FCM push to Zaprite P2P with the encrypted event.
-- Zaprite P2P NSE wakes.
-- Zaprite P2P verifies and decrypts the request.
-- Zaprite P2P checks monthly budget.
-- Zaprite P2P pays invoice using configured wallet backend.
-- Zaprite P2P publishes `kind:23195` response to `relay.getalby.com`.
-- Zaprite Rent receives response and marks rent paid.
+- Rent app creates a Lightning invoice to the landlord.
+- Rent app publishes a NIP-47 `kind:23194` `pay_invoice` request to `relay.getalby.com`.
+- Wallet-controlled wake provider observes the request on the relay.
+- Wake provider sends APNs/FCM push to the wallet app with the encrypted event.
+- Wallet app or extension wakes.
+- Wallet verifies and decrypts the request.
+- Wallet checks the monthly budget and atomically claims the request event id.
+- Wallet pays the invoice using its configured wallet backend.
+- Wallet persists the result and publishes a `kind:23195` response to `relay.getalby.com`.
+- Rent app receives the response and marks rent paid.
 
 ### Failure path
 
