@@ -53,7 +53,7 @@ sequenceDiagram
 
 ### Wallet-Created Secret Flow
 
-> Security warning: wallet-created secret mode returns secret-bearing NWC material through the app handoff. It SHOULD only be used for mobile-to-mobile app flows where both apps can receive the callback directly. Web, server, and cross-device flows SHOULD use client-created secret mode.
+> Security warning: wallet-created secret mode returns secret-bearing NWC material through the app handoff. It SHOULD only be used for mobile-to-mobile app flows where both apps can receive the callback directly. Web, server, and cross-device flows SHOULD use client-created secret mode because a returned NWC URI can be accidentally exposed through browser history, server logs, analytics, referrers, crash reports, screenshots, or intermediate redirect handlers.
 
 ```mermaid
 sequenceDiagram
