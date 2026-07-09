@@ -229,7 +229,7 @@ nostr+walletauth://connect
 Example:
 
 ```text
-nostr+walletauth://connect?version=1&name=Alby%20Go&app_id=com.alby.go&pubkey=687dd8ece211539364549b1f32c63eceec1e0661009ba65cf8ff2e73ba000746&return_to=com.alby.go%3A%2F%2Fnwa%2Fcallback&state=4f7c8b...&relay=wss%3A%2F%2Frelay.getalby.com&relay=wss%3A%2F%2Frelay2.getalby.com&request_methods=pay_invoice%20get_balance%20make_invoice&max_amount=500000&budget_renewal=monthly
+nostr+walletauth://connect?version=1&name=Alby%20Go&app_id=com.alby.go&pubkey=687dd8ece211539364549b1f32c63eceec1e0661009ba65cf8ff2e73ba000746&return_to=com.alby.go%3A%2F%2Fnwa%2Fcallback&state=4f7c8b...&relay=wss%3A%2F%2Frelay.getalby.com&relay=wss%3A%2F%2Frelay2.getalby.com&request_methods=pay_invoice%20get_balance%20make_invoice&max_amount=500000000&budget_renewal=monthly
 ```
 
 ### Wallet-Specific NWA Scheme
@@ -289,7 +289,7 @@ Parameter names and values MUST be UTF-8 percent-encoded. Repeated parameters ar
 | `relay` | RECOMMENDED | Preferred relay URL. MAY appear more than once. |
 | `request_methods` | OPTIONAL | Space-separated requested NWC methods. |
 | `notification_types` | OPTIONAL | Space-separated requested NIP-47 notification types. |
-| `max_amount` | OPTIONAL | Suggested maximum spend amount in sats per budget period. |
+| `max_amount` | OPTIONAL | Suggested maximum spend amount in millisatoshis per budget period. |
 | `budget_renewal` | OPTIONAL | Suggested budget renewal period. |
 | `expires_at` | OPTIONAL | Unix timestamp after which the connection should be rejected or expire. |
 | `isolated` | OPTIONAL | Boolean hint requesting an isolated wallet service key for this connection. |
@@ -442,11 +442,13 @@ Wallets MAY ignore unsupported notification types.
 
 ### `max_amount`
 
-The requesting app MAY suggest a maximum spend amount in sats.
+The requesting app MAY suggest a maximum spend amount in millisatoshis.
 
 ```text
-max_amount=500000
+max_amount=500000000
 ```
+
+Implementations MUST interpret `max_amount` as millisatoshis, matching NIP-47 amount fields.
 
 The wallet SHOULD display the budget to the user and MAY let the user edit it.
 
@@ -769,7 +771,7 @@ The requesting app:
 ### Request
 
 ```text
-nostr+walletauth+rebelwallet://connect?version=1&name=Alby%20Go&app_id=com.alby.go&pubkey=687dd8ece211539364549b1f32c63eceec1e0661009ba65cf8ff2e73ba000746&return_to=com.alby.go%3A%2F%2Fnwa%2Fcallback&state=4f7c8b9a&relay=wss%3A%2F%2Frelay.getalby.com&relay=wss%3A%2F%2Frelay2.getalby.com&request_methods=pay_invoice%20get_balance%20make_invoice&max_amount=500000&budget_renewal=monthly
+nostr+walletauth+rebelwallet://connect?version=1&name=Alby%20Go&app_id=com.alby.go&pubkey=687dd8ece211539364549b1f32c63eceec1e0661009ba65cf8ff2e73ba000746&return_to=com.alby.go%3A%2F%2Fnwa%2Fcallback&state=4f7c8b9a&relay=wss%3A%2F%2Frelay.getalby.com&relay=wss%3A%2F%2Frelay2.getalby.com&request_methods=pay_invoice%20get_balance%20make_invoice&max_amount=500000000&budget_renewal=monthly
 ```
 
 ### Wallet Approval
@@ -779,7 +781,7 @@ The wallet displays:
 - App: Alby Go
 - Methods: `pay_invoice`, `get_balance`, `make_invoice`
 - Relays: `wss://relay.getalby.com`, `wss://relay2.getalby.com`
-- Suggested budget: 500,000 sats
+- Suggested budget: 500,000 sats (`500000000` msats)
 - Suggested renewal: monthly
 
 The user may edit the policy before approving.
@@ -811,7 +813,7 @@ The requesting app:
 ### Request
 
 ```text
-nostr+walletauth+rebelwallet://connect?version=1&secret_mode=wallet&name=Alby%20Go&app_id=com.alby.go&return_to=com.alby.go%3A%2F%2Fnwa%2Fcallback&state=8d2a91f4&relay=wss%3A%2F%2Frelay.getalby.com&relay=wss%3A%2F%2Frelay2.getalby.com&request_methods=pay_invoice%20get_balance%20make_invoice&max_amount=500000&budget_renewal=monthly
+nostr+walletauth+rebelwallet://connect?version=1&secret_mode=wallet&name=Alby%20Go&app_id=com.alby.go&return_to=com.alby.go%3A%2F%2Fnwa%2Fcallback&state=8d2a91f4&relay=wss%3A%2F%2Frelay.getalby.com&relay=wss%3A%2F%2Frelay2.getalby.com&request_methods=pay_invoice%20get_balance%20make_invoice&max_amount=500000000&budget_renewal=monthly
 ```
 
 ### Wallet Approval
