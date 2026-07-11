@@ -585,6 +585,8 @@ For `response_mode=callback`, the wallet returns to the requesting app by openin
 
 For non-secret custom-scheme callbacks, wallets MAY use query parameters or fragments. For HTTPS callbacks containing only non-secret metadata, wallets SHOULD use fragments so callback data is not sent to web servers in request paths or query strings. For wallet-created secret mode, the wallet MUST place `nwc_uri` or `value` in the fragment and MUST encode the complete NWC URI as one parameter value.
 
+Percent-encoding is not required to have one canonical byte representation. Requesting apps MUST decode the parameter value exactly once and validate the resulting NWC URI, but MUST NOT require it to match the output of a particular platform's URL encoder. For example, JavaScript `encodeURIComponent` and Apple `URLComponents` can produce different valid encodings for the same parameter value.
+
 Return parameter names and values MUST use the same encoding rules as request parameters.
 
 ### Approved: Client-Created Secret
