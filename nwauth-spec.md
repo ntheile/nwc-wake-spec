@@ -8,14 +8,14 @@ Nostr Wallet Auth (NWAuth) defines an app-initiated authorization flow for creat
 
 NWAuth supports two setup modes:
 
-- **Wallet-created secret mode (mobile):** the wallet creates the NWC client secret after user approval and returns a complete `nostr+walletconnect://` URI to the requesting app. This is the implemented mode for verified, same-device mobile app handoffs. Because the callback carries a spend-capable private key, the callback destination must have ownership verified by the operating system or another wallet-trusted mechanism.
-- **Client-created secret mode (web, experimental):** the requesting app generates the NWC client secret locally before opening the wallet. The app shares only the corresponding client public key, requested capabilities, relays, and callback information with the wallet. The wallet records the approved policy for that client public key and returns the wallet service public key and selected relay information. The requesting app then assembles the final `nostr+walletconnect://` URI locally using its own secret. This mode is experimental and has not been implemented yet.
+- **Client-created secret mode (standard):** the requesting app generates the NWC client secret locally and places the corresponding client public key in the NWAuth URI authority, matching the format implemented by `@getalby/sdk`. After approval, the wallet publishes a NIP-47 `kind:13194` info event tagged to that client public key. The requesting app combines the event's wallet service public key with its retained secret and requested relays to construct the final `nostr+walletconnect://` URI. This mode is suitable for web, server, cross-device, and native applications, but is not yet implemented by the Rebel Wallet reference implementation.
+- **Wallet-created secret mode (mobile extension):** the wallet creates the NWC client secret after user approval and returns a complete `nostr+walletconnect://` URI through a verified, app-only Universal Link or Android App Link callback. This extension is implemented for verified same-device mobile handoffs. Because the callback carries a spend-capable private key, it MUST fail closed rather than open a browser or unverified custom scheme.
 
 This specification does not change NIP-47 request or response events. It standardizes the setup handoff between an app and a wallet.
 
 This flow is inspired by OAuth redirect UX, but it is not OAuth. It does not define OAuth clients, access tokens, refresh tokens, authorization codes, token endpoints, or OpenID Connect behavior.
 
-### Wallet-Created Secret Flow (mobile)
+### Wallet-Created Secret Flow (mobile extension)
 
 > Security warning: wallet-created secret mode returns secret-bearing NWC material through the app handoff. It MUST only be used for same-device flows with a verified callback destination, such as an iOS Universal Link, Android App Link, or another platform channel cryptographically bound to the requesting app. A custom URI scheme alone is not verified because another installed app can register the same scheme and intercept the NWC secret. Web, server, cross-device, and unverified custom-scheme flows MUST use client-created secret mode because a returned NWC URI can also be exposed through browser history, server logs, analytics, referrers, crash reports, screenshots, or intermediate redirect handlers.
 
@@ -53,7 +53,7 @@ sequenceDiagram
     A->>A: Decrypt using returned NWC secret + Rebel pubkey
 ```
 
-### Client-Created Secret Flow (web, experimental)
+### Client-Created Secret Flow (standard)
 
 ```mermaid
 sequenceDiagram
@@ -64,11 +64,12 @@ sequenceDiagram
     participant NSE as "Rebel NSE"
 
     Note over A: Creates NWC client keypair
-    A->>R: Open NWAuth request with Alby Go client pubkey
+    A->>R: Open NWAuth URI with client pubkey as URI authority
     R->>R: User approves permissions, budget, relays
     R->>R: Store Alby Go pubkey + Rebel wallet-service keypair
     R->>NS: Register push target + watched pubkeys/relays
-    R-->>A: Return Rebel wallet-service pubkey + relay
+    R->>Relay: Publish kind 13194 info event tagged to client pubkey
+    Relay-->>A: Wallet-service pubkey + approved capabilities
 
     Note over A: Alby Go keeps its private key
     A->>Relay: Publish encrypted NWC request to Rebel pubkey
@@ -116,7 +117,7 @@ NWAuth is not a brand-new idea. It appeared in earlier Mutiny Wallet and ZappleP
 
 NIP-47 also includes a simpler deep-link appendix using `nostrnwc://connect`, where the wallet returns a complete NWC pairing code. That flow improves mobile handoff but can still return a URI containing client secret material.
 
-Newer NWC "1-click connection" work includes the client-created-secret model: the requesting app generates the client secret, shares only the client public key with the wallet, and constructs the final NWC URI locally after authorization. This draft keeps that model for web, server, cross-device, and unverified callback environments. It also defines wallet-created secret mode as a first-class profile for verified same-device mobile handoffs, where returning a complete NWC URI matches existing NIP-47 onboarding behavior and avoids manual copy and paste.
+The established Alby SDK NWAuth implementation uses the client-created-secret model: the requesting app generates the client secret, places its public key in the URI authority, waits for a NIP-47 info event tagged to that public key, and constructs the final NWC URI locally. This specification adopts that wire format as its standard flow. It separately defines wallet-created secret mode as a mobile extension for verified same-device handoffs, where returning a complete NWC URI matches existing NIP-47 onboarding behavior and avoids manual copy and paste.
 
 ## Design Summary
 
@@ -125,16 +126,16 @@ Client-created secret mode:
 ```text
 Requesting app
 -> generates NWC client secret and client public key
--> opens NWAuth URI with client public key and requested policy
+-> opens nostr+walletauth://<client_pubkey> with requested policy
 -> wallet app displays connection approval screen
 -> user chooses permissions, budget, interval, and relays
 -> wallet authorizes the client public key
--> wallet publishes normal NIP-47 info metadata
--> wallet redirects to return URI with wallet public key and relay metadata
+-> wallet publishes a kind 13194 NIP-47 info event tagged to the client public key
+-> requesting app receives the wallet service public key from the relay
 -> requesting app constructs normal nostr+walletconnect URI locally
 ```
 
-Wallet-created secret mode:
+Wallet-created secret mobile extension:
 
 ```text
 Requesting app
@@ -207,9 +208,9 @@ The public key corresponding to the client secret. This is shared with the walle
 
 The URI opened by the requesting app to start NWC authorization in a wallet app.
 
-### Return URI
+### Return URI (wallet-created extension)
 
-The callback URI supplied by the requesting app. The wallet app opens this URI after approval, cancellation, or error.
+The verified Universal Link or Android App Link supplied by the requesting app in wallet-created mode. The wallet app opens it after approval, cancellation, or error.
 
 ### NWC URI
 
@@ -217,20 +218,26 @@ The normal NIP-47 connection URI constructed by the requesting app in client-cre
 
 ## URI Forms
 
-Implementations SHOULD support at least one of these forms.
+The standard client-created form follows the format implemented by `@getalby/sdk`:
+
+```text
+nostr+walletauth[+<wallet>]://<client_pubkey>?<parameters>
+```
+
+`client_pubkey` is the 64-character lowercase hexadecimal NWC client public key controlled by the requesting app. It appears in the URI authority, not in a `pubkey` query parameter.
 
 ### Generic NWAuth Scheme
 
 The generic scheme is intended for platforms that can route a URI to one of several capable wallets.
 
 ```text
-nostr+walletauth://connect
+nostr+walletauth://<client_pubkey>
 ```
 
 Example:
 
 ```text
-nostr+walletauth://connect?version=1&name=Alby%20Go&app_id=com.alby.go&pubkey=687dd8ece211539364549b1f32c63eceec1e0661009ba65cf8ff2e73ba000746&return_to=com.alby.go%3A%2F%2Fnwa%2Fcallback&state=4f7c8b9a21d64099a7352b97c927c341&relay=wss%3A%2F%2Frelay.getalby.com&relay=wss%3A%2F%2Frelay2.getalby.com&request_methods=pay_invoice%20get_balance%20make_invoice&max_amount=500000000&budget_renewal=monthly
+nostr+walletauth://687dd8ece211539364549b1f32c63eceec1e0661009ba65cf8ff2e73ba000746?relay=wss%3A%2F%2Frelay.getalby.com&relay=wss%3A%2F%2Frelay2.getalby.com&request_methods=pay_invoice%20get_balance%20make_invoice&name=Alby%20Go&max_amount=500000000&budget_renewal=monthly
 ```
 
 ### Wallet-Specific NWAuth Scheme
@@ -238,26 +245,32 @@ nostr+walletauth://connect?version=1&name=Alby%20Go&app_id=com.alby.go&pubkey=68
 A wallet-specific scheme is recommended when the requesting app wants to open a specific installed wallet.
 
 ```text
-nostr+walletauth+rebelwallet://connect
+nostr+walletauth+rebelwallet://<client_pubkey>
 ```
 
 Example:
 
 ```text
-nostr+walletauth+rebelwallet://connect?version=1&name=Alby%20Go&app_id=com.alby.go&pubkey=687dd8ece211539364549b1f32c63eceec1e0661009ba65cf8ff2e73ba000746&return_to=com.alby.go%3A%2F%2Fnwa%2Fcallback&state=4f7c8b9a21d64099a7352b97c927c341&relay=wss%3A%2F%2Frelay.getalby.com&request_methods=pay_invoice%20get_balance
+nostr+walletauth+rebelwallet://687dd8ece211539364549b1f32c63eceec1e0661009ba65cf8ff2e73ba000746?relay=wss%3A%2F%2Frelay.getalby.com&request_methods=pay_invoice%20get_balance&name=Alby%20Go
 ```
 
-Wallets MAY also support private app schemes, such as:
+The wallet suffix only selects a specific wallet application. It does not change the request semantics.
+
+### Wallet-Created Mobile Extension
+
+Wallet-created mode has no client public key at request time and therefore cannot use the standard client-created authority. A wallet MAY expose an explicit mobile extension entry point:
 
 ```text
-rebelwallet://nwa/connect
+nostr+walletauth+rebelwallet://connect
 ```
 
-This document standardizes the query parameters and response behavior, not every wallet's private scheme name.
+The literal `connect` authority identifies the wallet-created extension. Such requests MUST include `secret_mode=wallet`, `response_mode=callback`, `return_to`, `state`, and a verifiable `app_id`. They are not accepted by the existing `@getalby/sdk` `NWAClient.parseWalletAuthUrl()` parser and MUST NOT be presented as standard client-created NWAuth URIs.
+
+Wallets MAY also support a private entry point such as `rebelwallet://nwa/connect`, but the same callback requirements apply.
 
 ### HTTPS / Universal Link
 
-Wallets MAY expose an HTTPS entry point for web, iOS Universal Links, Android App Links, and install fallback pages.
+Wallets MAY expose an HTTPS entry point for opening their authorization UI. This entry point is distinct from the requesting app's verified callback URL.
 
 ```text
 https://wallet.example/nwa/connect
@@ -266,10 +279,12 @@ https://wallet.example/nwa/connect
 Example:
 
 ```text
-https://wallet.example/nwa/connect?version=1&name=Alby%20Go&app_id=https%3A%2F%2Falby-go.example&pubkey=687dd8ece211539364549b1f32c63eceec1e0661009ba65cf8ff2e73ba000746&return_to=https%3A%2F%2Falby-go.example%2Fnwa%2Fcallback&state=4f7c8b9a21d64099a7352b97c927c341&relay=wss%3A%2F%2Frelay.getalby.com&request_methods=pay_invoice%20get_balance
+https://wallet.example/nwa/connect?client_pubkey=687dd8ece211539364549b1f32c63eceec1e0661009ba65cf8ff2e73ba000746&relay=wss%3A%2F%2Frelay.getalby.com&request_methods=pay_invoice%20get_balance
 ```
 
-When returning non-secret connection metadata to an HTTPS callback, wallets SHOULD place result parameters in the URI fragment, not the query string. When returning a complete NWC URI in wallet-created secret mode, wallets MUST place result parameters in the URI fragment.
+An HTTPS transport MAY encode the client public key as `client_pubkey` because an HTTPS URL cannot place arbitrary protocol data in a custom-scheme authority without also using that value as the web host. The wallet MUST map it to the same semantics as the authority in the standard custom-scheme form.
+
+When returning a complete NWC URI in wallet-created mode, wallets MUST use a requesting-app Universal Link or Android App Link, MUST place result parameters in the URI fragment, and MUST require app-only delivery.
 
 ## Request Parameters
 
@@ -279,17 +294,16 @@ Parameter names and values MUST be UTF-8 percent-encoded. Repeated parameters ar
 
 | Parameter | Requirement | Description |
 | --- | --- | --- |
-| `version` | REQUIRED | Protocol version. MUST be `1`. |
-| `secret_mode` | OPTIONAL | `client` or `wallet`. Defaults to `client` when `pubkey` is present, otherwise `wallet`. |
-| `pubkey` | CONDITIONALLY REQUIRED | Client public key generated by the requesting app. Required for client-created secret mode. Omitted for wallet-created secret mode. |
-| `response_mode` | OPTIONAL | `callback` or `relay`. Defaults to `callback` when `return_to` is present. |
-| `return_to` | CONDITIONALLY REQUIRED | Callback URI opened after approval, cancellation, or error. Required for `response_mode=callback`; omitted for `response_mode=relay`. |
-| `state` | REQUIRED | Opaque nonce generated by the requesting app. Returned unchanged. |
+| `version` | OPTIONAL | Extension protocol version. If present, MUST be `1`. Existing Alby-compatible client-created requests may omit it. |
+| `secret_mode` | OPTIONAL | `client` or `wallet`. Defaults to `client` when the authority is a valid client public key. The literal `connect` authority requires `wallet`. |
+| `response_mode` | OPTIONAL | `relay` or `callback`. Standard client-created requests use `relay`; wallet-created requests require `callback`. |
+| `return_to` | REQUIRED for wallet-created mode | Verified Universal Link or Android App Link opened after approval, cancellation, or error. |
+| `state` | REQUIRED for callback mode | Opaque nonce generated by the requesting app and returned unchanged. |
 | `name` | RECOMMENDED | Human-readable requesting app name. |
-| `app_id` | RECOMMENDED | Platform app id, bundle id, package name, or web origin. |
+| `app_id` | REQUIRED for wallet-created mode | HTTPS origin used to verify the requesting app and callback association. |
 | `icon` | OPTIONAL | HTTPS URL for the requesting app icon. |
-| `relay` | RECOMMENDED | Preferred relay URL. MAY appear more than once. |
-| `request_methods` | OPTIONAL | Space-separated requested NWC methods. |
+| `relay` | REQUIRED for client-created mode | Relay URL used for authorization completion and subsequent NWC traffic. MAY appear more than once. |
+| `request_methods` | REQUIRED for client-created mode | Space-separated requested NWC methods. |
 | `notification_types` | OPTIONAL | Space-separated requested NIP-47 notification types. |
 | `max_amount` | OPTIONAL | Suggested maximum spend amount in millisatoshis per budget period. |
 | `budget_renewal` | OPTIONAL | Suggested budget renewal period. |
@@ -311,7 +325,7 @@ Wallets MUST apply implementation-defined but documented limits to the total URI
 version=1
 ```
 
-Wallets MUST reject unsupported versions.
+Wallets MUST reject unsupported versions when `version` is present. Omitting `version` preserves compatibility with the established Alby URI format.
 
 ### `secret_mode`
 
@@ -319,12 +333,12 @@ The `secret_mode` parameter declares which side creates the NWC client secret.
 
 Allowed values:
 
-- `client`: the requesting app creates the NWC client secret and includes `pubkey`.
+- `client`: the requesting app creates the NWC client secret and places its public key in the URI authority.
 - `wallet`: the wallet creates the NWC client secret after user approval and returns a complete NWC URI.
 
-If `secret_mode` is omitted and `pubkey` is present, wallets SHOULD treat the request as `secret_mode=client`.
+If `secret_mode` is omitted and the authority is a valid 64-character client public key, wallets MUST treat the request as `secret_mode=client`.
 
-If `secret_mode` is omitted and `pubkey` is absent, wallets MAY treat the request as `secret_mode=wallet`.
+The literal `connect` authority is reserved by this specification for the wallet-created mobile extension. Wallets MUST reject `://connect` unless `secret_mode=wallet` is explicitly present.
 
 Requesting apps SHOULD use `secret_mode=client` for web, server, cross-device, and unverified callback environments. Native same-device apps MAY use `secret_mode=wallet` when the return channel satisfies the verified app-only callback requirements in this specification.
 
@@ -334,26 +348,28 @@ The `response_mode` parameter declares how the wallet returns an authorization r
 
 Allowed values:
 
-- `callback`: the wallet opens `return_to` on the same device.
-- `relay`: the wallet publishes a signed, connection-specific NIP-47 info event to a bootstrap relay. This mode is only valid with `secret_mode=client`.
+- `relay`: the wallet publishes a signed NIP-47 info event tagged to the client public key. This is the standard client-created behavior.
+- `callback`: the wallet opens `return_to` on the same device. This is required for wallet-created mode.
 
-If `response_mode` is omitted and `return_to` is present, wallets SHOULD treat the request as `response_mode=callback`.
+If `response_mode` is omitted, wallets MUST infer `relay` for a client-public-key authority and `callback` for the `connect` authority.
 
-If `response_mode=relay`, `pubkey`, `state`, and at least one `relay` are REQUIRED and `return_to` MAY be omitted. Wallets MUST reject `response_mode=relay` with `secret_mode=wallet` because a relay response must never contain the client secret.
+If `response_mode=relay`, a valid client-public-key authority and at least one `relay` are REQUIRED; `return_to` and `state` are not required. Wallets MUST reject `response_mode=relay` with `secret_mode=wallet` because a relay response must never contain the client secret.
 
-### `pubkey`
+### Client public key authority
 
-The `pubkey` value is the NWC client public key controlled by the requesting app.
+In the standard client-created form, the URI authority is the NWC client public key controlled by the requesting app.
 
 ```text
-pubkey=687dd8ece211539364549b1f32c63eceec1e0661009ba65cf8ff2e73ba000746
+nostr+walletauth://687dd8ece211539364549b1f32c63eceec1e0661009ba65cf8ff2e73ba000746
 ```
 
 In client-created secret mode, the requesting app MUST retain the corresponding client secret locally and MUST NOT include it in the NWAuth request URI.
 
 Wallets SHOULD authorize exactly this client public key for the approved policy.
 
-In wallet-created secret mode, `pubkey` is omitted. The wallet creates a client secret after approval, derives the generated client public key, stores that generated client public key in the approved policy, and returns a complete NWC URI containing the generated client secret.
+Wallets MUST reject a client-created custom-scheme request that supplies the client public key only as a `pubkey` query parameter. This avoids two competing representations and matches `@getalby/sdk`.
+
+In wallet-created secret mode, the authority is the literal `connect`. The wallet creates a client secret after approval, derives the generated client public key, stores that generated client public key in the approved policy, and returns a complete NWC URI containing the generated client secret.
 
 ### `return_to`
 
@@ -362,7 +378,6 @@ The `return_to` value is the callback URI that the wallet opens after the user a
 Examples:
 
 ```text
-com.alby.go://nwa/callback
 https://alby-go.example/nwa/callback
 ```
 
@@ -383,15 +398,13 @@ A valid association file alone does not make secret delivery safe. The wallet MU
 
 If the platform reports that no associated app accepted the callback, the wallet MUST treat delivery as failed, MUST NOT retry through a browser or custom URI scheme, and MUST revoke the newly created NWC connection and any related wake registration.
 
-In client-created secret mode, a wallet MAY return non-secret connection metadata to an unverified custom scheme, but it SHOULD display the callback destination and clearly label the requesting identity as unverified.
-
 For an HTTPS callback, the wallet MUST require an exact origin match between `app_id` and `return_to` when `app_id` is an origin. Path matching and any registered callback allowlist are wallet-provider policy.
 
 Wallet-created secret requests MUST include a verifiable `app_id` or arrive with a platform callback capability that identifies the invoking app. A self-asserted native package or bundle identifier is not sufficient by itself.
 
 ### `state`
 
-The requesting app MUST generate a fresh, unpredictable `state` value containing at least 128 bits of entropy for each wallet auth request.
+For wallet-created callback mode, the requesting app MUST generate a fresh, unpredictable `state` value containing at least 128 bits of entropy for each request.
 
 Wallets MUST return the exact `state` value in the callback.
 
@@ -435,16 +448,9 @@ relay=wss%3A%2F%2Frelay.getalby.com
 relay=wss%3A%2F%2Frelay2.getalby.com
 ```
 
-Wallets MAY:
+For standard client-created mode, the wallet MUST either authorize the connection on at least one requested relay or reject the request. It MUST NOT silently substitute a relay because the requesting app uses its original relay set to receive the info event and construct the final NWC URI.
 
-- accept all requested relays
-- choose one requested relay
-- add their own default relays
-- return wallet-selected relays in the callback
-- let the user edit relays
-- reject unsupported relays
-
-The requesting app MUST use the relay or relays returned by the wallet when constructing the final NWC URI. If the wallet returns no relay, the requesting app MAY use the requested relay set.
+For wallet-created mode, the wallet MAY let the user edit relays because the returned NWC URI carries the final relay set.
 
 Relay URLs are untrusted network destinations. Wallets and wallet-operated wake providers MUST validate relay URLs before connecting. Hosted wake providers MUST:
 
@@ -559,12 +565,12 @@ Wallets MUST treat metadata as untrusted display data. It MUST NOT grant permiss
 After receiving a wallet auth request, the wallet SHOULD:
 
 1. Parse the URI.
-2. Verify `version`.
-3. Determine `secret_mode`.
-4. For client-created secret mode, verify `pubkey` is present and well formed.
-5. For wallet-created secret mode, verify `pubkey` is absent or ignore it.
+2. Verify `version` when present.
+3. Determine `secret_mode` from the authority and optional parameter.
+4. For client-created secret mode, verify the URI authority is a well-formed 64-character hexadecimal client public key.
+5. For wallet-created secret mode, verify the authority is `connect` and `secret_mode=wallet` is explicit.
 6. Verify `response_mode` and its conditionally required parameters.
-7. Verify `state` is present.
+7. For callback mode, verify `state`, `return_to`, and `app_id` are present and valid.
 8. Reject the request if `expires_at` is expired.
 9. Show a wallet-native approval screen.
 10. Display the requesting app name and requested capabilities.
@@ -572,7 +578,8 @@ After receiving a wallet auth request, the wallet SHOULD:
 12. In client-created secret mode, authorize the requested client public key only after explicit user approval.
 13. In wallet-created secret mode, create the NWC client secret and authorize the generated client public key only after explicit user approval.
 14. Publish or update the normal NIP-47 info event for the selected wallet service public key.
-15. Return the result through the selected response mode.
+15. In client-created mode, publish a NIP-47 `kind:13194` info event tagged to the approved client public key.
+16. In wallet-created mode, return the complete NWC URI through the verified app-only callback.
 
 Wallets SHOULD NOT authorize a requested or generated client public key before the user approves.
 
@@ -580,35 +587,17 @@ Wallets SHOULD let the user cancel.
 
 Wallets MAY remember trusted requesting apps, but SHOULD still show the final connection policy before creating a spend-capable NWC authorization.
 
-## Return URI
+## Wallet-Created Return URI
 
-For `response_mode=callback`, the wallet returns to the requesting app by opening the `return_to` URI with result parameters.
+For wallet-created `response_mode=callback`, the wallet returns to the requesting app by opening the verified `return_to` Universal Link or Android App Link with result parameters.
 
-For non-secret custom-scheme callbacks, wallets MAY use query parameters or fragments. For HTTPS callbacks containing only non-secret metadata, wallets SHOULD use fragments so callback data is not sent to web servers in request paths or query strings. For wallet-created secret mode, the wallet MUST place `nwc_uri` or `value` in the fragment and MUST encode the complete NWC URI as one parameter value.
+The wallet MUST place `nwc_uri` or `value` in the fragment and MUST encode the complete NWC URI as one parameter value. It MUST request app-only opening and MUST treat browser fallback as failure.
 
 Percent-encoding is not required to have one canonical byte representation. Requesting apps MUST decode the parameter value exactly once and validate the resulting NWC URI, but MUST NOT require it to match the output of a particular platform's URL encoder. For example, JavaScript `encodeURIComponent` and Apple `URLComponents` can produce different valid encodings for the same parameter value.
 
 Return parameter names and values MUST use the same encoding rules as request parameters.
 
-### Approved: Client-Created Secret
-
-```text
-com.alby.go://nwa/callback#state=4f7c8b9a21d64099a7352b97c927c341&status=approved&wallet_pubkey=abcdef...&relay=wss%3A%2F%2Frelay.getalby.com&relay=wss%3A%2F%2Frelay2.getalby.com&lud16=user%40wallet.example
-```
-
-HTTPS example:
-
-```text
-https://alby-go.example/nwa/callback#state=4f7c8b9a21d64099a7352b97c927c341&status=approved&wallet_pubkey=abcdef...&relay=wss%3A%2F%2Frelay.getalby.com
-```
-
-The requesting app verifies `state`, reads the returned wallet service public key and relays, and constructs the final NWC URI locally:
-
-```text
-nostr+walletconnect://<wallet_pubkey>?relay=wss%3A%2F%2Frelay.getalby.com&secret=<local_client_secret>&lud16=user%40wallet.example
-```
-
-### Approved: Wallet-Created Secret
+### Approved
 
 ```text
 https://alby-go.example/nwa/callback#state=4f7c8b9a21d64099a7352b97c927c341&status=approved&nwc_uri=<url-encoded-nwc-uri>
@@ -633,13 +622,13 @@ The requesting app verifies `state`, decodes the returned NWC URI, stores it sec
 ### Cancelled
 
 ```text
-com.alby.go://nwa/callback#state=4f7c8b9a21d64099a7352b97c927c341&status=cancelled
+https://alby-go.example/nwa/callback#state=4f7c8b9a21d64099a7352b97c927c341&status=cancelled
 ```
 
 ### Error
 
 ```text
-com.alby.go://nwa/callback#state=4f7c8b9a21d64099a7352b97c927c341&status=error&error=unsupported_methods
+https://alby-go.example/nwa/callback#state=4f7c8b9a21d64099a7352b97c927c341&status=error&error=unsupported_methods
 ```
 
 Suggested error values:
@@ -658,9 +647,7 @@ Suggested error values:
 | --- | --- | --- |
 | `state` | REQUIRED | The original request `state`. |
 | `status` | REQUIRED | `approved`, `cancelled`, or `error`. |
-| `wallet_pubkey` | REQUIRED when approved in client-created secret mode | NIP-47 wallet service public key. |
-| `relay` | RECOMMENDED when approved in client-created secret mode | Wallet-selected relay URL. MAY appear more than once. |
-| `nwc_uri` | REQUIRED when approved in wallet-created secret mode | URL-encoded normal NWC URI containing the wallet-generated client secret. |
+| `nwc_uri` | REQUIRED when approved | URL-encoded normal NWC URI containing the wallet-generated client secret. |
 | `value` | OPTIONAL | Compatibility alias for `nwc_uri`, matching existing NIP-47 deep-link behavior. |
 | `lud16` | OPTIONAL | Lightning address associated with the wallet/user. |
 | `error` | RECOMMENDED when error | Machine-readable error code. |
@@ -668,35 +655,30 @@ Suggested error values:
 
 Requesting apps MUST reject callbacks with missing or mismatched `state`.
 
-In client-created secret mode, requesting apps MUST reject `status=approved` callbacks without `wallet_pubkey`.
+Requesting apps MUST reject `status=approved` callbacks without `nwc_uri` or `value`.
 
-In wallet-created secret mode, requesting apps MUST reject `status=approved` callbacks without `nwc_uri` or `value`.
+## Standard Client-Created Completion
 
-## Relay-Mediated Return
-
-`response_mode=relay` is intended for cross-device authorization, such as a desktop web app displaying an NWAuth QR code that is approved by a wallet on a phone.
+Client-created authorization completes through Nostr relays, matching `@getalby/sdk` `NWAClient.subscribe()`. This works for same-device and cross-device authorization, including a desktop web app displaying an NWAuth QR code that is approved by a wallet on a phone.
 
 Example request:
 
 ```text
-nostr+walletauth://connect?version=1&secret_mode=client&response_mode=relay&pubkey=687dd8ece211539364549b1f32c63eceec1e0661009ba65cf8ff2e73ba000746&state=4f7c8b9a21d64099a7352b97c927c341&relay=wss%3A%2F%2Frelay.getalby.com&request_methods=pay_invoice%20get_balance
+nostr+walletauth://687dd8ece211539364549b1f32c63eceec1e0661009ba65cf8ff2e73ba000746?relay=wss%3A%2F%2Frelay.getalby.com&request_methods=pay_invoice%20get_balance
 ```
 
-The requesting app generates and retains the client secret, opens or displays an NWAuth request containing the corresponding `pubkey`, and subscribes to the requested bootstrap relays for a `kind:13194` event with both:
+The requesting app generates and retains the client secret, opens or displays an NWAuth request with the corresponding public key in the URI authority, and subscribes to the requested relays for a `kind:13194` event containing:
 
 - a `p` tag containing the requesting app's client public key
-- an `nwa` tag containing version `1` and the exact request `state`
 
-After approval, the wallet MUST publish a signed, connection-specific NIP-47 info event to at least one requested bootstrap relay. The event:
+After approval, the wallet MUST publish a signed NIP-47 info event to at least one requested relay. The event:
 
 - MUST be signed by the wallet service key authorized for this connection
-- MUST use a wallet service key unique to this connection so the replaceable info event cannot overwrite another connection's metadata
 - MUST include exactly one matching `p` tag
-- MUST include exactly one matching `nwa` tag
-- MUST include an `expiration` tag no more than 10 minutes in the future
 - MUST list the methods and notification types approved for this connection using normal NIP-47 info-event fields
-- MUST include one `relay` tag for each wallet-selected NWC relay
 - MUST NOT contain the NWC client secret, an NWC URI, a push token, or decrypted wallet data
+
+Wallets SHOULD use a wallet service key unique to the connection. Wallets MAY include normal NIP-47 info-event tags such as `encryption` and `notifications`.
 
 Example:
 
@@ -707,17 +689,14 @@ Example:
   "content": "get_info get_balance pay_invoice",
   "tags": [
     ["p", "<client_pubkey>"],
-    ["nwa", "1", "<state>"],
-    ["relay", "wss://relay.getalby.com"],
-    ["encryption", "nip44_v2"],
-    ["expiration", "<unix_timestamp>"]
+    ["encryption", "nip44_v2"]
   ]
 }
 ```
 
-The requesting app MUST verify the event signature, `kind`, `p` tag, `nwa` version and state, expiration, and relay URLs before accepting it. It then uses the event pubkey as `wallet_pubkey`, combines the returned relay set with its locally retained client secret, and constructs the normal NWC URI.
+The requesting app MUST verify the event signature, `kind`, and matching `p` tag before accepting it. It then uses the event pubkey as `wallet_pubkey` and combines it with the relays from the original request and its locally retained client secret to construct the normal NWC URI.
 
-The requesting app MUST stop waiting after its local authorization timeout, MUST ignore duplicate or unknown states, and SHOULD close the bootstrap subscription after accepting one valid response. The bootstrap relay is only an authorization return channel; the wallet-selected NWC relays are used for subsequent NIP-47 traffic.
+The requesting app SHOULD call `get_info` on the resulting NWC connection before persisting it, MUST stop waiting after its local authorization timeout, and SHOULD close the subscription after accepting one valid response.
 
 ## Wallet-Created Same-Device Profile
 
@@ -739,14 +718,14 @@ Requesting apps MAY accept `value` or `nwc_uri` from trusted wallets only when t
 
 iOS does not provide a reliable generic chooser for arbitrary custom URI schemes. Requesting apps SHOULD use one of:
 
-- a wallet-specific NWAuth scheme such as `nostr+walletauth+rebelwallet://connect`
-- a wallet private scheme such as `rebelwallet://nwa/connect`
+- a standard wallet-specific client-created URI such as `nostr+walletauth+rebelwallet://<client_pubkey>`
+- the wallet-created mobile extension such as `nostr+walletauth+rebelwallet://connect`
 - a wallet Universal Link such as `https://wallet.example/nwa/connect`
 - an in-app list of supported wallet apps
 
 Wallet apps SHOULD register their custom scheme and, when possible, a Universal Link for install fallback and web compatibility.
 
-Requesting apps SHOULD use a Universal Link `return_to` that they control. Custom-scheme callbacks MAY be used for client-created secret mode, but MUST NOT carry `nwc_uri`, `value`, or other secret material.
+Wallet-created requesting apps MUST use a Universal Link `return_to` that they control. Client-created mode completes over Nostr relays and does not require a callback.
 
 For wallet-created secret mode, the requesting app MUST associate the exact callback path with its application through an `apple-app-site-association` file and the Associated Domains entitlement. The association file MUST be served over HTTPS without redirects and MUST identify the intended application.
 
@@ -757,7 +736,7 @@ When returning a wallet-created secret, an iOS wallet MUST open the callback wit
 Android can route generic intent filters more naturally than iOS. Wallets MAY register an intent filter for:
 
 ```text
-nostr+walletauth://connect
+nostr+walletauth://<client_pubkey>
 ```
 
 Requesting apps MAY either:
@@ -767,7 +746,7 @@ Requesting apps MAY either:
 - open a wallet-specific URI
 - open an HTTPS App Link
 
-Android requesting apps SHOULD still verify `state` on return.
+Android requesting apps using wallet-created callback mode MUST verify `state` on return.
 
 Wallet-created secret mode MUST use a verified Android App Link or another callback capability explicitly bound to the invoking package. An implicit custom-scheme intent MUST NOT carry the NWC URI.
 
@@ -777,24 +756,12 @@ When returning a wallet-created secret, an Android wallet MUST restrict the call
 
 ### Web
 
-Web flows SHOULD use HTTPS URLs for both request and return and MUST use client-created secret mode.
-
-Wallets returning connection metadata to a web app SHOULD place result parameters in the fragment.
-
-Web apps SHOULD remove the fragment from browser history after consuming it.
-
-Same-device web flows MAY use `response_mode=callback` with client-created secret mode. Cross-device web flows MUST use `response_mode=relay` or another explicitly standardized backchannel; opening an HTTPS callback on the wallet's device does not return authorization to a browser running on another device.
+Web flows MUST use client-created secret mode. The web app generates and retains the client secret, presents the Alby-compatible NWAuth URI, and waits for the tagged `kind:13194` info event on the requested relay set.
 
 Example:
 
 ```text
-https://wallet.example/nwa/connect?version=1&pubkey=687dd8ece211539364549b1f32c63eceec1e0661009ba65cf8ff2e73ba000746&return_to=https%3A%2F%2Fapp.example%2Fnwa%2Fcallback&state=4f7c8b9a21d64099a7352b97c927c341
-```
-
-Return:
-
-```text
-https://app.example/nwa/callback#state=4f7c8b9a21d64099a7352b97c927c341&status=approved&wallet_pubkey=abcdef...&relay=wss%3A%2F%2Frelay.getalby.com
+nostr+walletauth://687dd8ece211539364549b1f32c63eceec1e0661009ba65cf8ff2e73ba000746?relay=wss%3A%2F%2Frelay.getalby.com&request_methods=get_info%20get_balance
 ```
 
 ## Security Considerations
@@ -813,9 +780,7 @@ Wallet-created secret mode MUST be limited to verified same-device app flows. We
 
 ### Callback data
 
-In client-created secret mode, the approved callback does not need to contain client secret material. It SHOULD contain only the wallet service public key, relay metadata, and optional display metadata.
-
-In wallet-created secret mode, the approved callback contains a complete NWC URI. Requesting apps MUST treat the returned `nwc_uri` or `value` as secret material.
+Only the wallet-created mobile extension returns authorization through a callback. Its approved callback contains a complete NWC URI, and requesting apps MUST treat the returned `nwc_uri` or `value` as secret material.
 
 Wallets and requesting apps SHOULD avoid logging full request and return URIs.
 
@@ -826,11 +791,11 @@ The `state` parameter protects against confused-deputy and stale callback handli
 Requesting apps MUST:
 
 - generate a fresh unpredictable `state`
-- store it with the pending request and any local client secret
+- store it with the pending wallet-created request
 - verify it on return
 - reject duplicate or unknown states
 
-`state` correlates a response with a request. It does not authenticate the requesting app, prove ownership of `return_to`, or prevent another app from claiming an unverified custom scheme.
+`state` correlates a wallet-created callback with a request. It does not authenticate the requesting app or prove ownership of `return_to`.
 
 ### User approval
 
@@ -848,7 +813,7 @@ Wallets SHOULD display these values as helpful context, not as cryptographic pro
 
 ### Callback allowlists
 
-Wallets MUST validate `return_to` before opening it and MUST reject malformed, dangerous, or unsupported schemes. Wallet-created secret mode MUST use a callback destination whose ownership is verified by the operating system or by a wallet-provider allowlist. Client-created secret mode MAY use an unverified custom scheme because the response contains no client secret, but the wallet SHOULD warn that the requesting identity is unverified.
+Wallets MUST validate `return_to` before opening it and MUST reject malformed, dangerous, or unsupported schemes. Wallet-created secret mode MUST use a callback destination whose ownership is verified by the operating system and by wallet policy where applicable.
 
 For wallet-created secret mode, a wallet-provider allowlist identifies which application is expected to own a callback but does not replace fail-closed platform routing. The wallet MUST require the operating system to open the verified application and MUST reject browser fallback.
 
@@ -884,13 +849,14 @@ The requesting app:
 
 1. Generates a new NWC client secret.
 2. Derives the client public key.
-3. Stores the pending `state` with the client secret.
-4. Opens the wallet auth URI.
+3. Retains the client secret locally.
+4. Subscribes to the requested relays for a `kind:13194` event tagged to the client public key.
+5. Opens or displays the wallet auth URI.
 
 ### Request
 
 ```text
-nostr+walletauth+rebelwallet://connect?version=1&name=Alby%20Go&app_id=com.alby.go&pubkey=687dd8ece211539364549b1f32c63eceec1e0661009ba65cf8ff2e73ba000746&return_to=com.alby.go%3A%2F%2Fnwa%2Fcallback&state=4f7c8b9a21d64099a7352b97c927c341&relay=wss%3A%2F%2Frelay.getalby.com&relay=wss%3A%2F%2Frelay2.getalby.com&request_methods=pay_invoice%20get_balance%20make_invoice&max_amount=500000000&budget_renewal=monthly
+nostr+walletauth+rebelwallet://687dd8ece211539364549b1f32c63eceec1e0661009ba65cf8ff2e73ba000746?relay=wss%3A%2F%2Frelay.getalby.com&relay=wss%3A%2F%2Frelay2.getalby.com&request_methods=pay_invoice%20get_balance%20make_invoice&name=Alby%20Go&max_amount=500000000&budget_renewal=monthly
 ```
 
 ### Wallet Approval
@@ -905,19 +871,15 @@ The wallet displays:
 
 The user may edit the policy before approving.
 
-### Return
+### Completion
 
-```text
-com.alby.go://nwa/callback#state=4f7c8b9a21d64099a7352b97c927c341&status=approved&wallet_pubkey=abcdef...&relay=wss%3A%2F%2Frelay.getalby.com&relay=wss%3A%2F%2Frelay2.getalby.com&lud16=user%40wallet.example
-```
-
-The requesting app verifies `state`, looks up the pending local client secret, and constructs:
+The wallet publishes a signed `kind:13194` info event with a `p` tag containing the client public key. The requesting app verifies the event, uses its signer pubkey as the wallet service pubkey, and constructs:
 
 ```text
 nostr+walletconnect://abcdef...?relay=wss%3A%2F%2Frelay.getalby.com&relay=wss%3A%2F%2Frelay2.getalby.com&secret=<local_client_secret>&lud16=user%40wallet.example
 ```
 
-The requesting app then uses normal NIP-47.
+The requesting app SHOULD verify the connection with `get_info`, then uses normal NIP-47.
 
 ## Example: Wallet-Created Secret
 
@@ -969,6 +931,9 @@ A conforming implementation verifies that:
 - [NIP-47 deep-link appendix](https://github.com/nostr-protocol/nips/blob/master/47.md#deep-links): `nostrnwc://connect`
 - [NWC one-click connection / client-created-secret flow](https://docs.nwc.dev/bitcoin-apps-and-websites/connecting-to-the-wallet/1-click-wallet-connections)
 - [Alby SDK NWAClient documentation](https://guides.getalby.com/developer-guide/developer-guide/nostr-wallet-connect-api/building-lightning-apps/nwc-js-sdk#nostr-wallet-auth)
+- [Alby SDK NWAClient implementation](https://github.com/getAlby/js-sdk/blob/master/src/nwc/NWAClient.ts)
+- [Alby SDK client-created NWAuth example](https://github.com/getAlby/js-sdk/blob/master/examples/nwc/client/nwa.ts)
+- [Alby SDK wallet acceptance example](https://github.com/getAlby/js-sdk/blob/master/examples/nwc/client/nwa-accept.ts)
 - [NIP-47 client-created secret pull request](https://github.com/nostr-protocol/nips/pull/1818)
 - Earlier Mutiny Wallet and ZapplePay NWAuth implementations
 - [Apple: Open Universal Links Only](https://developer.apple.com/documentation/uikit/uiapplication/openexternalurloptionskey/universallinksonly)
@@ -978,9 +943,7 @@ A conforming implementation verifies that:
 
 ## Open Questions
 
-- Should `nostr+walletauth://connect` remain the preferred generic scheme, or should wallets standardize only on HTTPS/App Links?
-- Should wallet-specific schemes use `nostr+walletauth+<wallet>://connect` or private wallet schemes?
-- Should `request_methods` be space-separated, comma-separated, or repeated `method` parameters?
-- Should a wallet return relays only in the callback, or also publish a connection-specific discovery event?
-- Should an approved callback include a detached wallet signature over `state`, `pubkey`, `wallet_pubkey`, and `relay`?
+- Should the wallet-created extension continue to use the literal `connect` authority or use only wallet-specific private schemes?
+- Should the wallet-created callback standardize only `nwc_uri`, only the NIP-47-compatible `value`, or both?
+- Should an approved wallet-created callback include a detached wallet signature over `state` and the returned NWC URI?
 - Should wallets advertise supported NWAuth entry points in NIP-47 wallet info events?
