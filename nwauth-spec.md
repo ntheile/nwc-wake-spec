@@ -15,43 +15,7 @@ This specification does not change NIP-47 request or response events. It standar
 
 This flow is inspired by OAuth redirect UX, but it is not OAuth. It does not define OAuth clients, access tokens, refresh tokens, authorization codes, token endpoints, or OpenID Connect behavior.
 
-### Client-Created Secret Flow (Mobile)
-
-```mermaid
-sequenceDiagram
-    participant A as "Alby Go"
-    participant R as "Rebel Wallet App"
-    participant NS as "Notification Server"
-    participant Relay as "Nostr Relay"
-    participant NSE as "Rebel NSE"
-
-    Note over A: Creates NWC client keypair
-    A->>R: Open NWAuth request with Alby Go client pubkey
-    R->>R: User approves permissions, budget, relays
-    R->>R: Store Alby Go pubkey + Rebel wallet-service keypair
-    R->>NS: Register push target + watched pubkeys/relays
-    R-->>A: Return Rebel wallet-service pubkey + relay
-
-    Note over A: Alby Go keeps its private key
-    A->>Relay: Publish encrypted NWC request to Rebel pubkey
-
-    NS->>Relay: Watches for NWC request events
-    Relay-->>NS: Event for Rebel wallet-service pubkey
-    NS->>NSE: Send APNs push with event id + relay
-
-    NSE->>Relay: Fetch NWC request event
-    Relay-->>NSE: Encrypted NWC request
-    NSE->>NSE: Decrypt using Rebel private key + Alby Go pubkey
-    NSE->>NSE: Check permissions/budget
-    NSE->>NSE: Run wallet action
-    NSE->>Relay: Publish encrypted NWC response to Alby Go pubkey
-
-    A->>Relay: Wait for response
-    Relay-->>A: Encrypted NWC response
-    A->>A: Decrypt using Alby Go private key + Rebel pubkey
-```
-
-### Wallet-Created Secret Flow (web, experimental)
+### Wallet-Created Secret Flow (mobile)
 
 > Security warning: wallet-created secret mode returns secret-bearing NWC material through the app handoff. It MUST only be used for same-device flows with a verified callback destination, such as an iOS Universal Link, Android App Link, or another platform channel cryptographically bound to the requesting app. A custom URI scheme alone is not verified because another installed app can register the same scheme and intercept the NWC secret. Web, server, cross-device, and unverified custom-scheme flows MUST use client-created secret mode because a returned NWC URI can also be exposed through browser history, server logs, analytics, referrers, crash reports, screenshots, or intermediate redirect handlers.
 
@@ -88,6 +52,43 @@ sequenceDiagram
     Relay-->>A: Encrypted NWC response
     A->>A: Decrypt using returned NWC secret + Rebel pubkey
 ```
+
+### Client-Created Secret Flow (web, experimental)
+
+```mermaid
+sequenceDiagram
+    participant A as "Alby Go"
+    participant R as "Rebel Wallet App"
+    participant NS as "Notification Server"
+    participant Relay as "Nostr Relay"
+    participant NSE as "Rebel NSE"
+
+    Note over A: Creates NWC client keypair
+    A->>R: Open NWAuth request with Alby Go client pubkey
+    R->>R: User approves permissions, budget, relays
+    R->>R: Store Alby Go pubkey + Rebel wallet-service keypair
+    R->>NS: Register push target + watched pubkeys/relays
+    R-->>A: Return Rebel wallet-service pubkey + relay
+
+    Note over A: Alby Go keeps its private key
+    A->>Relay: Publish encrypted NWC request to Rebel pubkey
+
+    NS->>Relay: Watches for NWC request events
+    Relay-->>NS: Event for Rebel wallet-service pubkey
+    NS->>NSE: Send APNs push with event id + relay
+
+    NSE->>Relay: Fetch NWC request event
+    Relay-->>NSE: Encrypted NWC request
+    NSE->>NSE: Decrypt using Rebel private key + Alby Go pubkey
+    NSE->>NSE: Check permissions/budget
+    NSE->>NSE: Run wallet action
+    NSE->>Relay: Publish encrypted NWC response to Alby Go pubkey
+
+    A->>Relay: Wait for response
+    Relay-->>A: Encrypted NWC response
+    A->>A: Decrypt using Alby Go private key + Rebel pubkey
+```
+
 
 ## Motivation
 
